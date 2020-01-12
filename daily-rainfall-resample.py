@@ -113,6 +113,91 @@ def correlated_rnd(corr_mat, rnd):
     z = normal2uniform(ans)
     return z
 
+def execute_markov(m, n, rnd, markov_models, names):
+    r"""Feed correlated random numbers through a markov chain
+    
+    Parameters
+    ----------
+    m : int
+        Number of measuring rainfall stations.
+    n : int
+        Number of sequences to simulate.
+    rnd : numpy ndarray
+        Matrix containg correlated uniform random numbers.
+    markov_models : dcit
+        Dictonary containg the markov chains for each station.
+    names : array_like
+        list or np array containg the given name to the rainfall stations.
+
+    Returns
+    -------
+    seq : numpy ndarray
+        Matrix with the state at each timestep for each station.
+
+    """
+    # Feed the random numbers through a markov process
+    seq = np.zeros((m, n))
+    seq[-1,0] = 1
+    
+    for i in range(1, n):
+        pre_seq = seq[:,i-1]
+        probs_full = rnd[:,i]
+        
+        for j in range(m):
+            trans = markov_models[names[j]]['trans']
+            if pre_seq[j] == 0:
+                pc = trans[0,0]
+            else:
+                pc = trans[1,0]
+            
+            if probs_full[j] <= pc:
+                seq[j,i] = 0
+            else:
+                seq[j,i] = 1
+    return seq
+
+def calc_occindex(occurence, m, occ_corr_org):
+    r"""Calculate occurence for each station at each day with rain
+    
+    Parameters
+    ----------
+    occurence : numpy ndarray
+        Occurence array with info about if a station have measured rainfall or not.
+    m : int
+        DESCRIPTION.
+    occ_corr_org : TYPE
+        DESCRIPTION.
+
+    Returns
+    -------
+    occ_index : TYPE
+        DESCRIPTION.
+
+    """
+    # Initialize the occurence index array
+    occ_index = np.zeros(occurence.shape)
+    
+    for i in range(m):
+        # Find all days with rain for the current station
+        ids = np.where(occurence[:,i]>0)[0]
+        
+        # Look up the the current stations correlation with the other stations
+        c = copy.copy(occ_corr_org[i,:])
+        c = np.delete(c, i)
+        
+        # Unit vector - needed for the calucations
+        u = np.ones(c.shape)
+        
+        # Go through each rainy day and calculate occurence index
+        for id_ in ids:
+            o = copy.copy(occurence[id_,:])
+            o = np.delete(o, i)
+            
+            km = np.dot(o,c) / np.dot(u, c)
+            
+            occ_index[id_, i] = km
+    
+    return occ_index
 # =============================================================================
 # Load and process the rainfall data
 # =============================================================================
@@ -209,24 +294,7 @@ for p in range(n_sim):
     rnd = correlated_rnd(occ_corr, rnd_)
     
     # Feed the random numbers through a markov process
-    seq = np.zeros((m, n))
-    seq[-1,0] = 1
-    
-    for i in range(1, n):
-        pre_seq = seq[:,i-1]
-        probs_full = rnd[:,i]
-        
-        for j in range(m):
-            trans = markov_models[names[j]]['trans']
-            if pre_seq[j] == 0:
-                pc = trans[0,0]
-            else:
-                pc = trans[1,0]
-            
-            if probs_full[j] <= pc:
-                seq[j,i] = 0
-            else:
-                seq[j,i] = 1
+    seq = execute_markov(m, n, rnd, markov_models, names)
                 
     # Get correlation
     occ_corr_temp = pd.DataFrame(data=seq.T, columns=names).corr()
@@ -263,35 +331,19 @@ if p==n_sim-1:
     print('\tmaximum number of iteration hit...')
     print(f'\tcurrent score is {fitness[-1]}')
     
+# Diagonlize the final matrix, if it is not positive definite
+if is_pos_def(occ_corr) == False:
+    # Diagonlize the matrix if it is not definite
+    occ_corr = diagonalize(occ_corr)
+    
 # =============================================================================
-# # Establish link between occurence index and precip. amount
+#  Establish link between occurence index and precip. amount
 # =============================================================================
 print('Creating model for daily rainfall amounts...')
 
-# Initialize the occurence index array
-occ_index = np.zeros(occurence.shape)
-
 # Calculate occurence indexs for each station
 print('\tcalculating occurence index..')
-for i in range(m):
-    # Find all days with rain for the current station
-    ids = np.where(occurence[:,i]>0)[0]
-    
-    # Look up the the current stations correlation with the other stations
-    c = occ_corr_org[i,:]
-    c = np.delete(c, i)
-    
-    # Unit vector - needed for the calucations
-    u = np.ones(c.shape)
-    
-    # Go through each rainy day and calculate occurence index
-    for id_ in ids:
-        o = occurence[id_,:]
-        o = np.delete(o, i)
-        
-        km = np.dot(o,c) / np.dot(u, c)
-        
-        occ_index[id_, i] = km
+occ_index = calc_occindex(occurence, m, occ_corr_org)
 
 # Create season array
 seasons = [[12, 1, 2],
@@ -305,15 +357,19 @@ season_name = ['DJF', 'MAM', 'JJA', 'SON']
 print('\tcreating multi-exponential model...')
 alpha_list = []
 lambda_list = []
+retbin_list = []
 for i in range(occ_index.shape[1]):
     n_class = 6
     
     # Categorize the data into 6(4) different classes - FIGURE OUT A WAY TO AUTO DETERMINE THE NCLASS
     df_temp = pd.DataFrame(data=occ_index[:, i], columns=['occ_index'])
     df_temp = df_temp[(df_temp.T != 0).any()]
-    df_temp['class'] = pd.qcut(df_temp['occ_index'], n_class, 
+    df_temp['class'], bins = pd.qcut(df_temp['occ_index'], n_class, 
                                      labels=np.arange(n_class-2), 
-                                     duplicates='drop')
+                                     duplicates='drop', retbins=True)
+    
+    # Save the class definition for the model
+    retbin_list.append(bins)
     
     # Pandas messes me up a bit, so have to manually reduce the number of classes
     n_class -= 2
@@ -332,7 +388,7 @@ for i in range(occ_index.shape[1]):
             
             month_class_mean[class_][month].append(df.iloc[df_temp.index[k], i])
    
-    # Go through each class, and calculate the mean
+    # Go through each class, and calculate the mean and save it for each season
     result = {}
     for key in range(n_class):
         class_values = month_class_mean[key]
@@ -357,8 +413,69 @@ for i in range(occ_index.shape[1]):
         
     alpha = np.array(alpha) / np.sum(alpha)
     alpha_list.append(alpha)
+    
 
+#%%
+# =============================================================================
+# Let's create some rainfall!!
+# =============================================================================
+# Initialze some stuff!
+# Set random seed
+np.random.seed(1234)
+    
+# Total number of sequences to model
+n = occurence.shape[0]
 
+# Set number of stations
+m = occurence.shape[1]
+
+# Create time array
+time_array = pd.date_range(start=df.index[0], end=df.index[-1])
+
+season_dict = {12 : 'DJF', 1 : 'DJF', 2 : 'DJF',
+               3 : 'MAM', 4 : 'MAM', 5 : 'MAM',
+               6: 'JJA', 7: 'JJA', 8: 'JJA',
+               9: 'SON', 10: 'SON',  11: 'SON'}
+    
+## Step 1 - Create, correlated, occurence array ##    
+# Generate standard normal random numbers
+rnd_ = np.random.normal(0.0, 1.0, size=(m, n))
+
+# Create correlated random, uniform, numbers
+rnd = correlated_rnd(occ_corr, rnd_)
+
+# Simulate occurences
+seq = execute_markov(m, n, rnd, markov_models, names)
+
+## Step 2 - Calculate occurence index for each station ##
+occ_index_new = calc_occindex(seq.T, m, occ_corr_org)
+
+## Step 3 - Determine rainfall amounts! ##
+rainfall = np.zeros((n,m))
+for i in range(occ_index_new.shape[1]):
+    # Unpack model parameters
+    bins   = retbin_list[i]   # Class definiton
+    result = lambda_list[i]   # Lambda values for the mutl exp function
+    alpha  =  alpha_list[i]   # Alpha values for the mult exp function
+    
+    # Categorize the data into the 4 different class'
+    df_temp = pd.DataFrame(data=occ_index_new[:, i], columns=['occ_index'])
+    df_temp = df_temp[(df_temp.T != 0).any()]
+    df_temp['class']= pd.cut(df_temp['occ_index'], bins=bins, labels=np.arange(bins.size-1))
+    
+    for k, class_ in enumerate(df_temp['class']):
+        # Determine season for rainfall occurence
+        season = season_dict[time_array[k].month]
+        
+        # Determine rainfall amount
+        x = np.random.rand()
+        temp_rain = []
+        for j in range(bins.size-1):
+            a = alpha[j-1]
+            l = 1 / result[j][season][0]
+            temp_rain.append(mult_exp(x, a, l))
+        
+        rainfall[df_temp.index[k], i] = np.sum(temp_rain)
 
 
 
