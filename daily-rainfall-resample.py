@@ -218,7 +218,10 @@ daily = df.values
 names = df.columns.values
 
 # Filter out low values Anything lower than the resolution
-daily[daily<0.3] = 0
+#daily[daily<0.3] = 0
+
+# Get correlation matrix of the rainfall amounts
+rainfall_corr_obs = df.corr()
 
 # Transform into occurence array - 1 means wet day, 0 means dry day
 occurence = copy.copy(daily)
@@ -363,16 +366,17 @@ for i in range(occ_index.shape[1]):
     
     # Categorize the data into 6(4) different classes - FIGURE OUT A WAY TO AUTO DETERMINE THE NCLASS
     df_temp = pd.DataFrame(data=occ_index[:, i], columns=['occ_index'])
-    df_temp = df_temp[(df_temp.T != 0).any()]
-    df_temp['class'], bins = pd.qcut(df_temp['occ_index'], n_class, 
-                                     labels=np.arange(n_class-2), 
+    df_temp = df_temp.drop(df_temp[occurence[:,i]==0].index)
+    _, bins = pd.qcut(df_temp['occ_index'], n_class, 
                                      duplicates='drop', retbins=True)
-    
+    n_class = bins.size-1
+    df_temp['class'] = pd.cut(df_temp['occ_index'], bins=bins, labels=np.arange(n_class), include_lowest=True)
+     
     # Save the class definition for the model
     retbin_list.append(bins)
     
     # Pandas messes me up a bit, so have to manually reduce the number of classes
-    n_class -= 2
+    #n_class -= 2
     
     # Locate rainfall amount for each class and month
     month_class_mean = {}
@@ -414,7 +418,6 @@ for i in range(occ_index.shape[1]):
     alpha = np.array(alpha) / np.sum(alpha)
     alpha_list.append(alpha)
     
-
 #%%
 # =============================================================================
 # Let's create some rainfall!!
@@ -430,13 +433,13 @@ n = occurence.shape[0]
 m = occurence.shape[1]
 
 # Create time array
-time_array = pd.date_range(start=df.index[0], end=df.index[-1])
+time_array = pd.date_range(start=df.index[0], periods=n)
 
 season_dict = {12 : 'DJF', 1 : 'DJF', 2 : 'DJF',
                3 : 'MAM', 4 : 'MAM', 5 : 'MAM',
                6: 'JJA', 7: 'JJA', 8: 'JJA',
                9: 'SON', 10: 'SON',  11: 'SON'}
-    
+   
 ## Step 1 - Create, correlated, occurence array ##    
 # Generate standard normal random numbers
 rnd_ = np.random.normal(0.0, 1.0, size=(m, n))
@@ -446,12 +449,14 @@ rnd = correlated_rnd(occ_corr, rnd_)
 
 # Simulate occurences
 seq = execute_markov(m, n, rnd, markov_models, names)
+#seq = copy.copy(occurence.T)
 
 ## Step 2 - Calculate occurence index for each station ##
 occ_index_new = calc_occindex(seq.T, m, occ_corr_org)
 
 ## Step 3 - Determine rainfall amounts! ##
 rainfall = np.zeros((n,m))
+x_array = np.random.rand(n)
 for i in range(occ_index_new.shape[1]):
     # Unpack model parameters
     bins   = retbin_list[i]   # Class definiton
@@ -460,15 +465,15 @@ for i in range(occ_index_new.shape[1]):
     
     # Categorize the data into the 4 different class'
     df_temp = pd.DataFrame(data=occ_index_new[:, i], columns=['occ_index'])
-    df_temp = df_temp[(df_temp.T != 0).any()]
-    df_temp['class']= pd.cut(df_temp['occ_index'], bins=bins, labels=np.arange(bins.size-1))
+    df_temp = df_temp.drop(df_temp[seq.T[:,i]==0].index)
+    df_temp['class']= pd.cut(df_temp['occ_index'], bins=bins, labels=np.arange(bins.size-1), include_lowest=True)
     
     for k, class_ in enumerate(df_temp['class']):
         # Determine season for rainfall occurence
         season = season_dict[time_array[k].month]
         
         # Determine rainfall amount
-        x = np.random.rand()
+        x = x_array[df_temp.index[k]]
         temp_rain = []
         for j in range(bins.size-1):
             a = alpha[j-1]
@@ -476,6 +481,45 @@ for i in range(occ_index_new.shape[1]):
             temp_rain.append(mult_exp(x, a, l))
         
         rainfall[df_temp.index[k], i] = np.sum(temp_rain)
+            
+#%%        
+# =============================================================================
+# Perform diagnostics of the rainfall simulator!
+# =============================================================================
+## Process the simulated rainfall ##
+# Add the simulated rainfall to a dataframe
+df_rainfall = pd.DataFrame(data=rainfall, index=time_array, columns=names)
+
+# Calculate the correlation of the rainfall amounts
+rainfall_corr_sim = df_rainfall.corr().values
+
+# Calculate the simulated occurence correlation
+df_occ_sim = pd.DataFrame(data=seq.T, columns=names)  
+occ_sim_corr = df_occ_sim.corr().values
+# ## Compare occurence correlation ##
+# org = np.reshape(occ_corr_org, (occ_corr_org.size,))
+# org[org==1] = np.nan
+
+# sim = np.reshape(occ_corr, (occ_corr.size,))
+# sim[sim==1] = np.nan
+
+# sim2 = np.reshape(occ_corr_temp.values, (occ_corr_temp.values.size,))
+# sim2[sim2==1] = np.nan
+
+# fig, ax = plt.subplots()
+# ax.scatter(org,sim2)
+# plt.title('Generated')
+# ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
+# diag_line, = ax.plot(ax.get_xlim(), ax.get_ylim(), ls="--", c=".3")
+# ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
+
+# ax.set_xlabel('Observed correlation [-]')
+# ax.set_ylabel('Simulated correlation [-]')
+# ax.set_title('Occurence correlation')
+# ax.grid('Major')
+
+
+
 
 
 
