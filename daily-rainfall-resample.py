@@ -157,13 +157,13 @@ def execute_markov(m, n, rnd, markov_models, names):
     return seq
 
 def calc_occindex(occurence, m, occ_corr_org):
-    r"""Calculate occurence for each station at each day with rain
-    
+    r"""
+
     Parameters
     ----------
-    occurence : numpy ndarray
-        Occurence array with info about if a station have measured rainfall or not.
-    m : int
+    occurence : TYPE
+        DESCRIPTION.
+    m : TYPE
         DESCRIPTION.
     occ_corr_org : TYPE
         DESCRIPTION.
@@ -198,6 +198,87 @@ def calc_occindex(occurence, m, occ_corr_org):
             occ_index[id_, i] = km
     
     return occ_index
+
+def determine_corrmat(corr_mat, org_corr_mat, corr_type='occurence', lr=0.1, n_sim=1000):
+    r"""Automatic determination of new correlation matrix
+
+    Parameters
+    ----------
+    corr_mat : numpy ndarray
+        Initial guess of correlation matrix.
+    org_corr_mat : numpy ndarray
+        Target correlation matrix - the output using corr_mat should
+        be comparable with this.
+    lr : float, optional
+        Convergence critieon, low value will result in higher accuracy but
+        lower convergence speed. The default is 0.1.
+    n_sim : int, optional
+        Maximum number of iterations. The default is 1000.
+
+    Returns
+    -------
+    corr_mat : numpy ndarray
+        Converged, positive definite version of corr_mat
+
+    """
+    fitness = []
+    rnd_ = np.random.normal(0.0, 1.0, size=(m, n))
+    last_avg = None
+    for p in range(n_sim):
+        # Test if the current correlation matrix is positive definite
+        if is_pos_def(corr_mat) == False:
+            # Diagonlize the matrix if it is not definite
+            corr_mat = diagonalize(corr_mat)
+        
+        # Create correlated random, uniform, numbers
+        rnd = correlated_rnd(corr_mat, rnd_)
+        
+        if corr_type=='occurence':
+            # Feed the random numbers through a markov process
+            rnd = execute_markov(m, n, rnd, markov_models, names)
+                    
+        # Get correlation
+        corr_temp = pd.DataFrame(data=rnd.T, columns=names).corr()
+        
+        # Get the difference between original correlation matrix and new one
+        dif = org_corr_mat - corr_temp.values
+        
+        # Add the difference to the correlation matrix
+        corr_mat = corr_mat + lr*dif
+        
+        # Log the score of the solution scheme
+        fitness.append(np.sum(np.abs(dif)))
+        
+        # After 10 runs, test if the scheme converged
+        if p>=10:
+            # Get the last 10 fitness scores
+            temp = np.array(fitness[-10:])
+            
+            # Calculate the change between each iteration
+            change = np.abs(temp[1:] - temp[:-1])
+            
+            # Get the average change
+            avg = np.mean(change)
+            
+            # Test if scheme have converged
+            if last_avg is not None and np.isclose(avg, last_avg, atol=1e-4) and fitness[-1]<1:
+                print('\tsolution scheme converged!')
+                print(f'\tthe score ended up at {fitness[-1]:.3f}')
+                break
+            
+            last_avg = avg
+    
+    if p==n_sim-1:
+        print('\tmaximum number of iteration hit...')
+        print(f'\tcurrent score is {fitness[-1]}')
+    
+    # Diagonlize the final matrix, if it is not positive definite
+    if is_pos_def(corr_mat) == False:
+        # Diagonlize the matrix if it is not definite
+        corr_mat = diagonalize(corr_mat)
+        
+    return corr_mat
+
 # =============================================================================
 # Load and process the rainfall data
 # =============================================================================
@@ -282,63 +363,12 @@ m = occurence.shape[1]
 
 # Copy original occurence array - Using copy to avoid pointer issues
 occ_corr = copy.copy(occ_corr_org)
+occ_corr = determine_corrmat(occ_corr, occ_corr_org)
 
-fitness = []
-n_sim = 1000
-rnd_ = np.random.normal(0.0, 1.0, size=(m, n))
-last_avg = None
-for p in range(n_sim):
-    # Test if the current correlation matrix is positive definite
-    if is_pos_def(occ_corr) == False:
-        # Diagonlize the matrix if it is not definite
-        occ_corr = diagonalize(occ_corr)
-    
-    # Create correlated random, uniform, numbers
-    rnd = correlated_rnd(occ_corr, rnd_)
-    
-    # Feed the random numbers through a markov process
-    seq = execute_markov(m, n, rnd, markov_models, names)
-                
-    # Get correlation
-    occ_corr_temp = pd.DataFrame(data=seq.T, columns=names).corr()
-    
-    # Get the difference between original correlation matrix and new one
-    dif = occ_corr_org - occ_corr_temp.values
-    
-    # Add the difference to the correlation matrix
-    occ_corr = occ_corr + 0.1*dif
-    
-    # Log the score of the solution scheme
-    fitness.append(np.sum(np.abs(dif)))
-    
-    # After 10 runs, test if the scheme converged
-    if p>=10:
-        # Get the last 10 fitness scores
-        temp = np.array(fitness[-10:])
-        
-        # Calculate the change between each iteration
-        change = np.abs(temp[1:] - temp[:-1])
-        
-        # Get the average change
-        avg = np.mean(change)
-        
-        # Test if scheme have converged
-        if last_avg is not None and np.isclose(avg, last_avg, atol=1e-4) and fitness[-1]<1:
-            print('\tsolution scheme converged!')
-            print(f'\tthe score ended up at {fitness[-1]:.3f}')
-            break
-        
-        last_avg = avg
+# Copy rainfall correlation array - Using copy to avoid pointer issues
+rainfall_corr = copy.copy(rainfall_corr_obs.values)
+rainfall_corr = determine_corrmat(rainfall_corr, rainfall_corr_obs.values, corr_type='rainfall')
 
-if p==n_sim-1:
-    print('\tmaximum number of iteration hit...')
-    print(f'\tcurrent score is {fitness[-1]}')
-    
-# Diagonlize the final matrix, if it is not positive definite
-if is_pos_def(occ_corr) == False:
-    # Diagonlize the matrix if it is not definite
-    occ_corr = diagonalize(occ_corr)
-    
 # =============================================================================
 #  Establish link between occurence index and precip. amount
 # =============================================================================
@@ -449,14 +479,18 @@ rnd = correlated_rnd(occ_corr, rnd_)
 
 # Simulate occurences
 seq = execute_markov(m, n, rnd, markov_models, names)
-#seq = copy.copy(occurence.T)
+
+# Generate standard normal random numbers
+#rnd_ = np.random.normal(0.0, 1.0, size=(m, n))
+
+# Create correlated random, uniform, numbers
+x_array = correlated_rnd(rainfall_corr, rnd_).T
 
 ## Step 2 - Calculate occurence index for each station ##
 occ_index_new = calc_occindex(seq.T, m, occ_corr_org)
 
 ## Step 3 - Determine rainfall amounts! ##
 rainfall = np.zeros((n,m))
-x_array = np.random.rand(n)
 for i in range(occ_index_new.shape[1]):
     # Unpack model parameters
     bins   = retbin_list[i]   # Class definiton
@@ -473,7 +507,7 @@ for i in range(occ_index_new.shape[1]):
         season = season_dict[time_array[k].month]
         
         # Determine rainfall amount
-        x = x_array[df_temp.index[k]]
+        x = x_array[df_temp.index[k], i]
         temp_rain = []
         for j in range(bins.size-1):
             a = alpha[j-1]
@@ -481,8 +515,10 @@ for i in range(occ_index_new.shape[1]):
             temp_rain.append(mult_exp(x, a, l))
         
         rainfall[df_temp.index[k], i] = np.sum(temp_rain)
-            
-#%%        
+
+# Save the simulated rainfall to a txt file, for pca.
+np.savetxt('mult_gets_rainfall.dat', rainfall)
+             
 # =============================================================================
 # Perform diagnostics of the rainfall simulator!
 # =============================================================================
@@ -496,29 +532,48 @@ rainfall_corr_sim = df_rainfall.corr().values
 # Calculate the simulated occurence correlation
 df_occ_sim = pd.DataFrame(data=seq.T, columns=names)  
 occ_sim_corr = df_occ_sim.corr().values
-# ## Compare occurence correlation ##
-# org = np.reshape(occ_corr_org, (occ_corr_org.size,))
-# org[org==1] = np.nan
 
-# sim = np.reshape(occ_corr, (occ_corr.size,))
-# sim[sim==1] = np.nan
+## Compare occurence correlation ##
+org = np.reshape(occ_corr_org, (occ_corr_org.size,))
+org[org==1] = np.nan
 
-# sim2 = np.reshape(occ_corr_temp.values, (occ_corr_temp.values.size,))
-# sim2[sim2==1] = np.nan
+sim = np.reshape(occ_sim_corr, (occ_sim_corr.size,))
+sim[sim==1] = np.nan
 
-# fig, ax = plt.subplots()
-# ax.scatter(org,sim2)
-# plt.title('Generated')
-# ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
-# diag_line, = ax.plot(ax.get_xlim(), ax.get_ylim(), ls="--", c=".3")
-# ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
+fig, ax = plt.subplots()
+ax.scatter(org,sim)
+ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
+diag_line, = ax.plot(ax.get_xlim(), ax.get_ylim(), ls="--", c=".3")
+ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
 
-# ax.set_xlabel('Observed correlation [-]')
-# ax.set_ylabel('Simulated correlation [-]')
-# ax.set_title('Occurence correlation')
-# ax.grid('Major')
+ax.set_xlabel('Observed correlation [-]')
+ax.set_ylabel('Simulated correlation [-]')
+ax.set_title('Occurence correlation')
+ax.grid('Major')
 
+# Save the figure
+fig.savefig('diagnostic_plots/occurence_correlation.png', dpi=300)
 
+## Compare rainfall correlation ##
+org = np.reshape(rainfall_corr_obs.values, (rainfall_corr_obs.values.size,))
+org[org==1] = np.nan
+
+sim = np.reshape(rainfall_corr_sim, (rainfall_corr_sim.size,))
+sim[sim==1] = np.nan
+
+fig, ax = plt.subplots()
+ax.scatter(org,sim)
+ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
+diag_line, = ax.plot(ax.get_xlim(), ax.get_ylim(), ls="--", c=".3")
+ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
+
+ax.set_xlabel('Observed correlation [-]')
+ax.set_ylabel('Simulated correlation [-]')
+ax.set_title('Precip. amount correlation')
+ax.grid('Major')
+
+# Save the figure
+fig.savefig('diagnostic_plots/precip_correlation.png', dpi=300)
 
 
 

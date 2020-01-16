@@ -1,4 +1,15 @@
 # 3d-rainfall-generator
-Combining Markov Chains, Stochastic Storm Transposition and Machine learning to simuate spatially distributed rainfall timeseries...
+In this project we investigate if it is possible to combine traditional weather generators, stochastic storm transposition and general data science to create long term continuous rainfall time series at multiple site locations.
 
-Lets see if this works
+
+
+## Things to do:
+
+
+
+## Changelog
+
+ 
+
+## Description
+
