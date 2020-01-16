@@ -13,3 +13,4 @@ In this project we investigate if it is possible to combine traditional weather 
 
 ## Description
 
+![plot](diagnostic_plots/occurence_correlation.png)
