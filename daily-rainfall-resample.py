@@ -10,6 +10,27 @@ import os
 # =============================================================================
 # Functions in script
 # =============================================================================
+# Print iterations progress
+def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█'):
+    """
+    Call in a loop to create terminal progress bar
+    @params:
+        iteration   - Required  : current iteration (Int)
+        total       - Required  : total iterations (Int)
+        prefix      - Optional  : prefix string (Str)
+        suffix      - Optional  : suffix string (Str)
+        decimals    - Optional  : positive number of decimals in percent complete (Int)
+        length      - Optional  : character length of bar (Int)
+        fill        - Optional  : bar fill character (Str)
+    """
+    percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
+    filledLength = int(length * iteration // total)
+    bar = fill * filledLength + '-' * (length - filledLength)
+    print('\r{} |{}| {}% {}'.format(prefix, bar, percent, suffix), end = '\r')
+    # Print New Line on Complete
+    if iteration == total: 
+        print()
+        
 def rainfall_stat(data, timeres):
     '''
         Function to calculate selected statistics of the rainfall timeseries
@@ -443,6 +464,8 @@ diagnostic_plots = False
 # Set current working directiory
 cwd = os.getcwd()
 
+# Set base path for diagnostic plots
+plot_dir = 'diagnostic_plots/'
 # Disable plotting
 plt.ioff()
 
@@ -477,6 +500,12 @@ daily = df.values
 
 # Store column names for later use
 names = df.columns.values
+
+# Create folders for each station - used for diagnostic plots
+for name in names:
+    # Create folder to store diagnostic plots in - if one does not already exist
+    if not os.path.isdir(cwd + '/diagnostic_plots/' + name):
+        os.mkdir(f'{cwd}/{plot_dir}{name}')
 
 # Filter out low values Anything lower than the resolution
 daily[daily<0.3] = 0
@@ -698,79 +727,197 @@ np.savetxt('mult_gets_rainfall.dat', rainfall)
 # =============================================================================
 # Perform diagnostics of the rainfall simulator!
 # =============================================================================
-## Process the simulated rainfall ##
-# Add the simulated rainfall to a dataframe
-df_rainfall = pd.DataFrame(data=rainfall, index=time_array, columns=names)
-
-# Calculate the correlation of the rainfall amounts
-rainfall_corr_sim = df_rainfall.corr().values
-
-# Calculate the simulated occurence correlation
-df_occ_sim = pd.DataFrame(data=seq.T, columns=names)  
-occ_sim_corr = df_occ_sim.corr().values
-
-## Compare occurence correlation ##
-org = np.reshape(occ_corr_org, (occ_corr_org.size,))
-org[org==1] = np.nan
-
-sim = np.reshape(occ_sim_corr, (occ_sim_corr.size,))
-sim[sim==1] = np.nan
-
-fig, ax = plt.subplots()
-ax.scatter(org,sim)
-ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
-diag_line, = ax.plot(ax.get_xlim(), ax.get_ylim(), ls="--", c=".3")
-ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
-
-ax.set_xlabel('Observed correlation [-]')
-ax.set_ylabel('Simulated correlation [-]')
-ax.set_title('Occurence correlation')
-ax.grid('Major')
-
-# Save the figure
-fig.savefig('diagnostic_plots/occurence_correlation.png', dpi=300)
-
-## Compare rainfall correlation ##
-org = np.reshape(rainfall_corr_obs.values, (rainfall_corr_obs.values.size,))
-org[org==1] = np.nan
-
-sim = np.reshape(rainfall_corr_sim, (rainfall_corr_sim.size,))
-sim[sim==1] = np.nan
-
-fig, ax = plt.subplots()
-ax.scatter(org,sim)
-ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
-diag_line, = ax.plot(ax.get_xlim(), ax.get_ylim(), ls="--", c=".3")
-ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
-
-ax.set_xlabel('Observed correlation [-]')
-ax.set_ylabel('Simulated correlation [-]')
-ax.set_title('Precip. amount correlation')
-ax.grid('Major')
-
-# Save the figure
-fig.savefig('diagnostic_plots/precip_correlation.png', dpi=300)
-
+#%%
+def mulGETS():
+    ## Step 1 - Create, correlated, occurence array ##    
+    # Generate standard normal random numbers
+    rnd_ = np.random.normal(0.0, 1.0, size=(m, n))
+    
+    # Create correlated random, uniform, numbers
+    rnd = correlated_rnd(occ_corr, rnd_)
+    
+    # Simulate occurences
+    seq = execute_markov(m, n, rnd, markov_model_seasonal, names, seasonal=True, time_array=time_array)
+    
+    # Calculate occurence index
+    occ_index_sim = calc_occindex(seq.T, m, occ_corr)
+    
+    # Create correlated random, uniform, numbers
+    rnd_ = np.random.normal(0.0, 1.0, size=(m, n))
+    x_array = correlated_rnd(rainfall_corr, rnd_).T
+    ## Step 3 - Determine rainfall amounts! ##    
+    rainfall = np.zeros((n,m))
+    for i in range(df.shape[1]):
+        #bins = retbin_list[i]
+        df_temp = pd.DataFrame(data=occ_index_sim[:, i], columns=['occ_index'])
+        df_temp = df_temp.drop(df_temp[seq[i,:]==0].index)
+        
+        n_class = bins.size-1
+        df_temp['class'] = pd.cut(df_temp['occ_index'], bins=bins, labels=np.arange(n_class), include_lowest=True)
+        
+        for k, seq_ in enumerate(seq[i, :]):
+            if seq_==1:                                  
+                # Determine rainfall amount
+                x = x_array[k,i]
+                class_ = df_temp['class'][k]
+                temp_rain = expon_sample(1 / expon_model[class_, i], x)
+                
+                rainfall[k, i] = temp_rain
+                
+    return rainfall
+    
 # Calculate annual statistics and lowfrequency variablitiy
-def get_stats(df):
+def find_conf(data, conf):
+    sorted_data = np.sort(data)
+    lower_conf = sorted_data[int(conf/2*data.size)]
+    upper_conf = sorted_data[int((1-conf/2)*data.size)]
+    return (lower_conf, upper_conf)
+
+def get_stats(df, names, i):
     df_stat = df[names[i]].divide(24).to_frame().rename(columns={names[i] : 'Int'})
     stats = rainfall_stat(df_stat, timeres=1440)
     return stats
 
 stat_obs = {}
 for i in range(names.size):
-    stat_obs[names[i]] = get_stats(df)
+    stat_obs[names[i]] = get_stats(df, names, i)
 
+print('Create ensemble to investigate variability of the model')
+n_rlz = 10000
+printProgressBar (0, n_rlz, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█')
 stat_sim = {}
-for i in range(1):
-    if names[i] not in stat_sim:
-        stat_sim[names[i]] = []
+for k in range(n_rlz):
+    rainfall = mulGETS()
+    df_rainfall = pd.DataFrame(data=rainfall, index=time_array, columns=names)
+    for i in range(m):
+        if names[i] not in stat_sim:
+            stat_sim[names[i]] = []
+        stat_sim[names[i]].append(get_stats(df_rainfall, names, i))
+    printProgressBar (k+1, n_rlz, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█')
+    
+    
+for key in stat_obs:
+    # Extract the observered data
+    labels = ['ap', 'spwi', 'spsp', 'spsu', 'spau']
+    
+    # Collect the data
+    gauge_ap = stat_obs[key]['ap'][0]
+    gauge_spwi = stat_obs[key]['spwi'][0]
+    gauge_spsp = stat_obs[key]['spsp'][0]
+    gauge_spsu = stat_obs[key]['spsu'][0]
+    gauge_spau = stat_obs[key]['spau'][0]
+    
+    gauge_data = [gauge_ap, gauge_spwi, gauge_spsp, gauge_spsu, gauge_spau]
+    
+    ap = []
+    spwi = []
+    spsp = []
+    spsu = []
+    spau = []
+    for i in range(n_rlz):
+        ap.append(stat_sim[key][i]['ap'][0])
+        spwi.append(stat_sim[key][i]['spwi'][0])
+        spsp.append(stat_sim[key][i]['spsp'][0])
+        spsu.append(stat_sim[key][i]['spsu'][0])
+        spau.append(stat_sim[key][i]['spau'][0])
         
-    stat_sim[names[i]].append(get_stats(df_rainfall))
+    error_array = np.zeros((2, len(labels)))
+    sst_ap   = np.median(ap)
+    l, u = find_conf(np.array(ap), 0.05)
+    error_array[0,0] = np.abs(l-sst_ap)
+    error_array[1,0] = np.abs(u-sst_ap)
+    
+    sst_spwi = np.median(spwi)
+    l, u = find_conf(np.array(spwi), 0.05)
+    error_array[0,1] = np.abs(l-sst_spwi)
+    error_array[1,1] = np.abs(u-sst_spwi)
+    
+    sst_spsp = np.median(spsp)
+    l, u = find_conf(np.array(spsp), 0.05)
+    error_array[0,2] = np.abs(l-sst_spsp)
+    error_array[1,2] = np.abs(u-sst_spsp)
+    
+    sst_spsu = np.median(spsu)
+    l, u = find_conf(np.array(spsu), 0.05)
+    error_array[0,3] = np.abs(l-sst_spsu)
+    error_array[1,3] = np.abs(u-sst_spsu)
+    
+    sst_spau = np.median(spau)
+    l, u = find_conf(np.array(spau), 0.05)
+    error_array[0,4] = np.abs(l-sst_spau)
+    error_array[1,4] = np.abs(u-sst_spau)
+    
+    sst_data = [sst_ap, sst_spwi, sst_spsp, sst_spsu, sst_spau]
+    
+    # Plot the data
+    x = np.arange(len(labels))  # the label locations
+    width = 0.35  # the width of the bars
+    
+    fig, ax = plt.subplots()
+    rects1 = ax.bar(x - width/2, gauge_data, width, label='Gauge')
+    rects2 = ax.bar(x + width/2, sst_data, width, label='SST', yerr=error_array)
+    ax.set_ylabel('Rainfall depth [mm]')
+    ax.set_title(f'Mean rainfall depth: gauge_{key} vs model')
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.legend()
+    
+    fig.savefig(f'{plot_dir}{key}/{key}_mean-precip.png', dpi=300)
         
     
 
+# ## Process the simulated rainfall ##
+# # Add the simulated rainfall to a dataframe
+# df_rainfall = pd.DataFrame(data=rainfall, index=time_array, columns=names)
 
+# # Calculate the correlation of the rainfall amounts
+# rainfall_corr_sim = df_rainfall.corr().values
+
+# # Calculate the simulated occurence correlation
+# df_occ_sim = pd.DataFrame(data=seq.T, columns=names)  
+# occ_sim_corr = df_occ_sim.corr().values
+
+# ## Compare occurence correlation ##
+# org = np.reshape(occ_corr_org, (occ_corr_org.size,))
+# org[org==1] = np.nan
+
+# sim = np.reshape(occ_sim_corr, (occ_sim_corr.size,))
+# sim[sim==1] = np.nan
+
+# fig, ax = plt.subplots()
+# ax.scatter(org,sim)
+# ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
+# diag_line, = ax.plot(ax.get_xlim(), ax.get_ylim(), ls="--", c=".3")
+# ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
+
+# ax.set_xlabel('Observed correlation [-]')
+# ax.set_ylabel('Simulated correlation [-]')
+# ax.set_title('Occurence correlation')
+# ax.grid('Major')
+
+# # Save the figure
+# fig.savefig('diagnostic_plots/occurence_correlation.png', dpi=300)
+
+# ## Compare rainfall correlation ##
+# org = np.reshape(rainfall_corr_obs.values, (rainfall_corr_obs.values.size,))
+# org[org==1] = np.nan
+
+# sim = np.reshape(rainfall_corr_sim, (rainfall_corr_sim.size,))
+# sim[sim==1] = np.nan
+
+# fig, ax = plt.subplots()
+# ax.scatter(org,sim)
+# ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
+# diag_line, = ax.plot(ax.get_xlim(), ax.get_ylim(), ls="--", c=".3")
+# ax.set(xlim=(0.4, 1), ylim=(0.4, 1))
+
+# ax.set_xlabel('Observed correlation [-]')
+# ax.set_ylabel('Simulated correlation [-]')
+# ax.set_title('Precip. amount correlation')
+# ax.grid('Major')
+
+# # Save the figure
+# fig.savefig('diagnostic_plots/precip_correlation.png', dpi=300)
 
 
 

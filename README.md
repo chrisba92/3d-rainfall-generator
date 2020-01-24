@@ -27,7 +27,11 @@ The general procedure and methodology is presented in [this][doi:10.1016/j.jhydr
 * Determine the correlation matrix needed, to simulate the observed correlation of either rainfall occurrence and precipitation amount.
 * Establish link between occurrence index (number of "wet" station at once, relative to the interstation correlation) and average seasonal precipitation. Use this information to construct a multi-exponential distribution for each station.
 
-### Results
+## Results
+
+In this section we will run through the output of the mulGETS model.
+
+### Spatial coherence
 
 Figure 1 displays the observed and simulated correlation of both daily rainfall occurrences and daily rainfall amounts. 
 
@@ -39,3 +43,12 @@ A             |  B
 The mulGETS model is quite succesfull at simulating these two parameters. For some reason there is a small error on the right-hand figure (the precipitation amounts). Our initial suspension is that it could be caused by either: the fact that the occurence correlation matrix converges on a somewhat high error (0.446) where the mulGETS paper reports on an error in the 1e-3. The paper also mentions making adjustment to the multi-exponential distribution, which we have not done. 
 
 Overall the results presented on figure shows that the mulGETS model retains the spatial coherence of the rainfall field.
+
+### Annual and seasonal precipitation
+Figure 2 displays the observed mean annual and seasonal precipitation, compared with the simulated ones from the mulGETS model.
+
+A             |  B
+:-------------------------:|:-------------------------:
+![](diagnostic_plots/5670/5670_mean-precip.png)  |![](diagnostic_plots/5705/5705_mean-precip.png)
+C              |  D
+![](diagnostic_plots/5759/5759_mean-precip.png)  |![](diagnostic_plots/5800/5800_mean-precip.png)
